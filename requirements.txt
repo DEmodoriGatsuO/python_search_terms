@@ -1,0 +1,31 @@
+# Excel file processing
+openpyxl==3.1.2
+xlrd==2.0.1
+pyxlsb==1.0.10
+
+# Word file processing
+python-docx==0.8.11
+
+# PowerPoint file processing
+python-pptx==0.6.21
+
+# Progress bar
+tqdm==4.65.0
+
+# Logging
+# (uses built-in logging module)
+
+# Multithreading
+# (uses built-in concurrent.futures module)
+
+# YAML configuration
+pyyaml==6.0.2
+
+# HTTP requests (for webhook notifications)
+requests==2.31.0
+
+# Windows-specific requirement (uncomment if needed)
+# pywin32==306; sys_platform == 'win32'
+
+# Testing
+pytest==7.3.1

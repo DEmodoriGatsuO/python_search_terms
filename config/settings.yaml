@@ -1,0 +1,19 @@
+keywords:
+  A:
+    - keyword1
+    - keyword2
+  B:
+    - keyword3
+    - keyword4
+
+file_paths:
+  csv: "path/to/your/csv/file.csv"
+
+notifications:
+  webhook_url: "https://your-webhook-url.com"
+  error_threshold: 10
+
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(levelname)s - %(message)s"
+  file_base: "logs/file_search_log"
