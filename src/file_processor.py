@@ -2,6 +2,7 @@ import logging
 from concurrent.futures import ThreadPoolExecutor
 from tqdm import tqdm
 from src.file_readers.excel_reader import read_excel
+from src.file_readers.xlsb_reader import read_xlsb
 from src.file_readers.word_reader import read_word
 from src.file_readers.powerpoint_reader import read_powerpoint
 from src.file_readers.text_reader import read_text
@@ -61,8 +62,10 @@ class FileProcessor:
             })
 
     def read_file(self, file_path):
-        if file_path.endswith(('.xlsx', '.xls', '.xlsb', '.xlsm')):
+        if file_path.endswith(('.xlsx', '.xls', '.xlsm')):
             return read_excel(file_path)
+        elif file_path.endswith('.xlsb'):
+            return read_xlsb(file_path)            
         elif file_path.endswith(('.docx', '.doc')):
             return read_word(file_path)
         elif file_path.endswith(('.pptx', '.ppt')):
