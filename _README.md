@@ -83,3 +83,228 @@ CSVファイルからファイルパスを読み取り、各ファイルで単�
 
 - 検索する単語リストは、必要に応じて `word1_list` と `word2_list` を変更することで調整
 - ログレベルは `logging.basicConfig()` の `level` パラメータで調整
+
+```
+import logging
+from concurrent.futures import ThreadPoolExecutor
+from tqdm import tqdm
+from src.file_readers.excel_reader import read_excel
+from src.file_readers.word_reader import read_word
+from src.file_readers.powerpoint_reader import read_powerpoint
+from src.file_readers.text_reader import read_text
+from src.file_readers.zip_reader import read_zip
+from src.file_readers.csv_reader import read_csv
+from src.utils.error_handler import send_error_notification
+import requests
+import datetime
+import socket
+import os
+
+class FileProcessor:
+    def __init__(self, keyword_A_list, keyword_B_list, webhook_url, error_threshold, api_url=None):
+        """
+        初期化メソッド
+
+        :param keyword_A_list: 検索対象のキーワードAのリスト
+        :param keyword_B_list: 検索対象のキーワードBのリスト
+        :param webhook_url: エラー通知用のWebhook URL
+        :param error_threshold: エラー通知を送信する閾値
+        :param api_url: 処理完了後に結果を送信するAPIのURL（オプション）
+        """
+        self.keyword_A_list = keyword_A_list
+        self.keyword_B_list = keyword_B_list
+        self.webhook_url = webhook_url
+        self.error_threshold = error_threshold
+        self.api_url = api_url
+        self.error_buffer = []
+        self.logger = logging.getLogger(__name__)
+        self.logger.setLevel(logging.INFO)
+        handler = logging.StreamHandler()
+        formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+        handler.setFormatter(formatter)
+        self.logger.addHandler(handler)
+
+        # カウンタの初期化
+        self.total_files = 0
+        self.error_count = 0
+
+    def process_file(self, file_path):
+        """
+        個々のファイルを処理します。
+
+        :param file_path: 処理対象のファイルパス
+        """
+        try:
+            content = self.read_file(file_path)
+            if content is not None:
+                keyword_match, matched_keywords = self.search_keywords(content)
+                
+                # ファイル処理成功のカウント
+                self.total_files += 1
+
+                # テキストログに詳細を記録
+                self.logger.info(f"Processed file: {file_path}")
+                if keyword_match:
+                    self.logger.info(f"Keywords found in file: {file_path}. Matched keywords: {', '.join(matched_keywords)}")
+                else:
+                    self.logger.info(f"No keywords found in file: {file_path}")
+                
+                # CSVに結果を記録 (すべてのファイル)
+                self.logger.info('', extra={
+                    'csv_result': True,
+                    'file_path': file_path,
+                    'status': 'Matched' if keyword_match else 'Not Matched',
+                    'matched_keywords': ', '.join(matched_keywords) if keyword_match else 'None'
+                })
+            else:
+                self.logger.warning(f"Unable to read file: {file_path}")
+                self.error_count += 1
+                # 読み取り不可能なファイルもCSVに記録
+                self.logger.info('', extra={
+                    'csv_result': True,
+                    'file_path': file_path,
+                    'status': 'Unreadable',
+                    'error_message': 'Unable to read file'
+                })
+        
+        except Exception as e:
+            error_message = f"Error processing file {file_path}: {str(e)}"
+            self.logger.error(error_message)
+            self.handle_error(error_message)
+            self.error_count += 1
+            # エラーが発生したファイルもCSVに記録
+            self.logger.info('', extra={
+                'csv_result': True,
+                'file_path': file_path,
+                'status': 'Error',
+                'error_message': str(e)
+            })
+
+    def read_file(self, file_path):
+        """
+        ファイルタイプに応じて適切なリーダーを使用してファイルを読み取ります。
+
+        :param file_path: 読み取るファイルのパス
+        :return: ファイルの内容またはNone
+        """
+        if file_path.endswith(('.xlsx', '.xls', '.xlsb', '.xlsm')):
+            return read_excel(file_path)
+        elif file_path.endswith(('.docx', '.doc')):
+            return read_word(file_path)
+        elif file_path.endswith(('.pptx', '.ppt')):
+            return read_powerpoint(file_path)
+        elif file_path.endswith('.txt'):
+            return read_text(file_path)
+        elif file_path.endswith('.zip'):
+            return read_zip(file_path)
+        elif file_path.endswith('.csv'):
+            return read_csv(file_path)
+        else:
+            self.logger.warning(f"Unsupported file type: {file_path}")
+            return None
+
+    def search_keywords(self, content):
+        """
+        コンテンツ内でキーワードを検索します。
+
+        :param content: 検索対象のコンテンツ
+        :return: キーワードが見つかったかどうかと、マッチしたキーワードのリスト
+        """
+        matched_keywords = []
+        for keyword in self.keyword_A_list + self.keyword_B_list:
+            if keyword in content:
+                matched_keywords.append(keyword)
+        return bool(matched_keywords), matched_keywords
+
+    def handle_error(self, error_message):
+        """
+        エラーハンドリングを行います。
+
+        :param error_message: エラーメッセージ
+        """
+        self.logger.error(error_message)
+        self.error_buffer.append(error_message)
+        if len(self.error_buffer) >= self.error_threshold:
+            send_error_notification(self.webhook_url, self.error_buffer)
+            self.error_buffer.clear()
+
+    def process_excel(self, excel_file_path):
+        """
+        Excelファイルからファイルパスを読み取り、各ファイルを処理します。
+        処理完了後にAPIへ結果を送信します。
+
+        :param excel_file_path: 処理対象のExcelファイルのパス
+        """
+        start_time = datetime.datetime.now()
+        self.logger.info(f"Excelファイルの処理を開始します: {excel_file_path}")
+
+        try:
+            file_paths = read_excel(excel_file_path)
+            
+            if not file_paths:
+                self.logger.warning(f"Excelファイルにファイルパスが見つかりません: {excel_file_path}")
+                return
+
+            with ThreadPoolExecutor() as executor:
+                list(tqdm(executor.map(self.process_file, file_paths), total=len(file_paths)))
+
+            self.logger.info(f"Excelファイルの処理が完了しました: {excel_file_path}")
+
+        except Exception as e:
+            error_message = f"Error processing Excel file {excel_file_path}: {str(e)}"
+            self.handle_error(error_message)
+            self.error_count += 1
+
+        end_time = datetime.datetime.now()
+
+        # API連携
+        if self.api_url:
+            data = {
+                "start_time": start_time.strftime('%Y-%m-%d %H:%M:%S'),
+                "end_time": end_time.strftime('%Y-%m-%d %H:%M:%S'),
+                "total_files": self.total_files,
+                "error_count": self.error_count,
+                "input_file": os.path.basename(excel_file_path),
+                "host_name": socket.gethostname()
+            }
+            try:
+                response = requests.post(self.api_url, json=data)
+                if response.status_code == 200:
+                    self.logger.info(f"Successfully posted results to API: {self.api_url}")
+                else:
+                    self.logger.error(f"Failed to post results to API. Status code: {response.status_code}")
+            except Exception as e:
+                self.logger.error(f"Error occurred while posting results to API: {str(e)}")
+
+    def process_zip(self, zip_file_path):
+        """
+        ZIPファイルを処理します。
+
+        :param zip_file_path: 処理対象のZIPファイルのパス
+        """
+        try:
+            file_contents = read_zip(zip_file_path)
+            for file_name, content in file_contents.items():
+                keyword_match, matched_keywords = self.search_keywords(content)
+                
+                extra = {
+                    'file_path': f"{zip_file_path}/{file_name}",
+                    'keyword_match': 'Yes' if keyword_match else 'No',
+                    'matched_keywords': ', '.join(matched_keywords) if matched_keywords else 'None'
+                }
+                self.logger.info(f"Processed file in ZIP: {file_name}", extra=extra)
+                
+                if keyword_match:
+                    self.logger.info(f"Keywords found in ZIP file: {file_name}. Matched keywords: {extra['matched_keywords']}", extra=extra)
+                else:
+                    self.logger.info(f"No keywords found in ZIP file: {file_name}", extra=extra)
+        
+        except Exception as e:
+            extra = {
+                'file_path': zip_file_path,
+                'keyword_match': 'Error'
+            }
+            self.logger.error(f"Error processing ZIP file {zip_file_path}: {str(e)}", extra=extra)
+            self.handle_error(f"Error processing ZIP file {zip_file_path}: {str(e)}")
+            self.error_count += 1
+```
